@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+pymongo
+firebase-admin
+google-auth
+python-multipart
+jinja2
+python-dotenv
+azure-storage-blob

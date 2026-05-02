@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+firebase-credentials.json
+*.json
+!package.json
+.idea/
+.vscode/
+*.egg-info/
+dist/
+build/
