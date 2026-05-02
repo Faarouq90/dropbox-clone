@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DropClone</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<script>
+    window.FIREBASE_API_KEY     = "{{ firebase_api_key }}";
+    window.FIREBASE_AUTH_DOMAIN = "{{ firebase_auth_domain }}";
+    window.FIREBASE_PROJECT_ID  = "{{ firebase_project_id }}";
+    window.USER_EMAIL           = "{{ user_email }}";
+    window.USER_NAME            = "{{ user_name }}";
+</script>
+
+<div class="app-layout">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+        <div class="sidebar-logo">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>
+            </svg>
+            DropClone
+        </div>
+
+        <nav class="sidebar-nav">
+            <button class="nav-item active" data-tab="myfiles" onclick="switchTab('myfiles')">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                </svg>
+                My Files
+            </button>
+            <button class="nav-item" data-tab="shared" onclick="switchTab('shared')">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                </svg>
+                Shared With Me
+            </button>
+            <button class="nav-item" data-tab="duplicates" onclick="switchTab('duplicates')">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                </svg>
+                Duplicates
+            </button>
+        </nav>
+
+        <div class="sidebar-user">
+            <div class="user-avatar" id="user-avatar"></div>
+            <div class="user-info">
+                <span class="user-email" id="user-email-display"></span>
+                <a href="#" class="logout-link" onclick="logout(); return false;">Logout</a>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main -->
+    <div class="main-area">
+
+        <!-- Top bar -->
+        <header class="topbar">
+            <div id="topbar-left">
+                <nav id="breadcrumb" class="breadcrumb"></nav>
+                <span id="page-title" class="topbar-title" style="display:none"></span>
+            </div>
+            <div id="topbar-actions" class="topbar-actions">
+                <button class="btn-outline" onclick="openNewFolderModal()">+ New Folder</button>
+                <button class="btn-primary" onclick="document.getElementById('file-input').click()">&#8593; Upload File</button>
+                <input type="file" id="file-input" style="display:none" onchange="handleFileSelect(this)">
+            </div>
+        </header>
+
+        <!-- Panels -->
+        <main class="content" id="main-content">
+
+            <!-- My Files -->
+            <div id="panel-myfiles" class="panel">
+                <div id="folders-section">
+                    <p class="section-label">FOLDERS</p>
+                    <div id="folders-grid" class="grid"></div>
+                </div>
+                <div id="files-section">
+                    <p class="section-label">FILES</p>
+                    <div id="files-grid" class="grid"></div>
+                </div>
+                <div id="empty-state" class="empty-state" style="display:none">
+                    <div class="empty-box">This folder is empty</div>
+                </div>
+            </div>
+
+            <!-- Shared With Me -->
+            <div id="panel-shared" class="panel" style="display:none">
+                <div id="shared-grid" class="grid"></div>
+                <div id="shared-empty" class="empty-state" style="display:none">
+                    No files have been shared with you yet.
+                </div>
+            </div>
+
+            <!-- Duplicates -->
+            <div id="panel-duplicates" class="panel" style="display:none">
+                <div class="duplicates-toolbar">
+                    <button class="btn-outline" onclick="loadDuplicates()">Scan for Duplicates</button>
+                </div>
+                <div id="duplicates-content"></div>
+                <div id="duplicates-empty" class="empty-state" style="display:none">
+                    No duplicate files found. Your DropClone is clean!
+                </div>
+            </div>
+
+        </main>
+    </div>
+</div>
+
+<!-- Modal: New Folder -->
+<div id="modal-new-folder" class="modal-backdrop" style="display:none">
+    <div class="modal">
+        <h2>New Folder</h2>
+        <label for="new-folder-name">Folder name</label>
+        <input type="text" id="new-folder-name" placeholder="e.g. Documents" autocomplete="off">
+        <div class="modal-actions">
+            <button class="btn-ghost" onclick="closeModal('modal-new-folder')">Cancel</button>
+            <button class="btn-primary" onclick="createFolder()">Create Folder</button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Delete Directory -->
+<div id="modal-delete-dir" class="modal-backdrop" style="display:none">
+    <div class="modal">
+        <h2>Delete &ldquo;<span id="delete-dir-name"></span>&rdquo;?</h2>
+        <p>This action cannot be undone.</p>
+        <div class="modal-actions">
+            <button class="btn-ghost" onclick="closeModal('modal-delete-dir')">Cancel</button>
+            <button class="btn-danger" onclick="confirmDeleteDir()">Delete</button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Delete File -->
+<div id="modal-delete-file" class="modal-backdrop" style="display:none">
+    <div class="modal">
+        <h2>Delete &ldquo;<span id="delete-file-name"></span>&rdquo;?</h2>
+        <p>This action cannot be undone.</p>
+        <div class="modal-actions">
+            <button class="btn-ghost" onclick="closeModal('modal-delete-file')">Cancel</button>
+            <button class="btn-danger" onclick="confirmDeleteFile()">Delete</button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Overwrite -->
+<div id="modal-overwrite" class="modal-backdrop" style="display:none">
+    <div class="modal">
+        <h2>File Already Exists</h2>
+        <p><strong id="overwrite-filename"></strong> already exists here. Do you want to replace it?</p>
+        <div class="modal-actions">
+            <button class="btn-ghost" onclick="closeModal('modal-overwrite')">Cancel</button>
+            <button class="btn-danger" onclick="confirmOverwrite()">Replace</button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Share File -->
+<div id="modal-share" class="modal-backdrop" style="display:none">
+    <div class="modal">
+        <h2>Share File</h2>
+        <p class="modal-subtitle">The recipient will have read-only access.</p>
+        <label for="share-email">Recipient email address</label>
+        <input type="email" id="share-email" placeholder="user@example.com" autocomplete="off">
+        <div id="share-feedback" style="display:none"></div>
+        <div class="modal-actions">
+            <button class="btn-ghost" onclick="closeModal('modal-share')">Cancel</button>
+            <button class="btn-primary" onclick="confirmShare()">Share</button>
+        </div>
+    </div>
+</div>
+
+<script type="module" src="/static/firebase-login.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
