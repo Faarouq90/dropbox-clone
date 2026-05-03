@@ -97,8 +97,7 @@ async def root(request: Request):
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
-    return templates.TemplateResponse("login.html", {
-        "request":              request,
+    return templates.TemplateResponse(request=request, name="login.html", context={
         "firebase_api_key":     os.getenv("FIREBASE_API_KEY", ""),
         "firebase_auth_domain": os.getenv("FIREBASE_AUTH_DOMAIN", ""),
         "firebase_project_id":  os.getenv("FIREBASE_PROJECT_ID", ""),
@@ -144,8 +143,7 @@ async def dashboard(request: Request):
     user = get_current_user(request)
     if not user:
         return RedirectResponse(url="/login")
-    return templates.TemplateResponse("dashboard.html", {
-        "request":              request,
+    return templates.TemplateResponse(request=request, name="dashboard.html", context={
         "user_email":           user.get("email", ""),
         "user_name":            user.get("name", user.get("email", "")),
         "firebase_api_key":     os.getenv("FIREBASE_API_KEY", ""),
