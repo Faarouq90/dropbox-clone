@@ -37,13 +37,8 @@ dirs_col.create_index([("owner_uid", 1), ("path", 1)], unique=True)
 files_col.create_index([("owner_uid", 1), ("directory_path", 1), ("name", 1)], unique=True)
 
 # ── Azurite / Azure Blob Storage ──────────────────────────────────────────
-_default_conn = (
-    "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;"
-    "AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OGLjX+N00nGN+Ll0+kHQFRe7bkqRxBNtJ8sXkXQ==;"
-    "BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
-)
 blob_service = BlobServiceClient.from_connection_string(
-    os.getenv("AZURE_STORAGE_CONNECTION_STRING", _default_conn)
+    os.getenv("AZURE_STORAGE_CONNECTION_STRING", "UseDevelopmentStorage=true")
 )
 CONTAINER = os.getenv("BLOB_CONTAINER", "dropbox-files")
 try:
