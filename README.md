@@ -37,21 +37,21 @@ Edit `.env` with your credentials:
 - `MONGODB_URI` — MongoDB Atlas connection string
 - `FIREBASE_CREDENTIALS` — path to your Firebase service account JSON (download from Firebase Console → Project Settings → Service Accounts)
 - `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID` — from Firebase Console → Project Settings → General
-- `AZURE_STORAGE_CONNECTION_STRING` — Azurite default connection string (pre-filled in `.env.example`)
+- `AZURE_STORAGE_CONNECTION_STRING` — set to `UseDevelopmentStorage=true` for Azurite (pre-filled in `.env.example`)
 
 ### 4. Start Azurite
 
 ```bash
-azurite --silent --location ./azurite-data --debug ./azurite-debug.log
+azurite --skipApiVersionCheck
 ```
 
 ### 5. Run the application
 
 ```bash
-uvicorn main:app --reload
+uvicorn main:app --reload --port 8080
 ```
 
-Open [http://localhost:8000](http://localhost:8000) in your browser.
+Open [http://localhost:8080](http://localhost:8080) in your browser. Use `localhost` not `127.0.0.1` — Firebase only authorises the `localhost` origin.
 
 ## Features
 
