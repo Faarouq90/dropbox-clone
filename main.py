@@ -1,15 +1,18 @@
 import os
+import io
+import hashlib
 from datetime import datetime
 from typing import Optional
 
-from fastapi import FastAPI, Request, Response, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, Request, Response, HTTPException, UploadFile, File as FastAPIFile, Form
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pymongo import MongoClient
 from bson import ObjectId
 import firebase_admin
 from firebase_admin import credentials, auth as firebase_auth
+from azure.storage.blob import BlobServiceClient, ContentSettings
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -33,16 +36,32 @@ users_col.create_index("uid", unique=True)
 dirs_col.create_index([("owner_uid", 1), ("path", 1)], unique=True)
 files_col.create_index([("owner_uid", 1), ("directory_path", 1), ("name", 1)], unique=True)
 
+# ── Azurite / Azure Blob Storage ──────────────────────────────────────────
+_default_conn = (
+    "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;"
+    "AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OGLjX+N00nGN+Ll0+kHQFRe7bkqRxBNtJ8sXkXQ==;"
+    "BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
+)
+blob_service = BlobServiceClient.from_connection_string(
+    os.getenv("AZURE_STORAGE_CONNECTION_STRING", _default_conn)
+)
+CONTAINER = os.getenv("BLOB_CONTAINER", "dropbox-files")
+try:
+    blob_service.create_container(CONTAINER)
+except Exception:
+    pass
 
+
+# ── Helpers ───────────────────────────────────────────────────────────────
 def ensure_root_dir(uid: str):
     dirs_col.update_one(
         {"owner_uid": uid, "path": "/"},
         {"$setOnInsert": {
-            "owner_uid":  uid,
-            "name":       "/",
-            "path":       "/",
+            "owner_uid":   uid,
+            "name":        "/",
+            "path":        "/",
             "parent_path": None,
-            "created_at": datetime.utcnow(),
+            "created_at":  datetime.utcnow(),
         }},
         upsert=True,
     )
@@ -53,7 +72,6 @@ def parent_path(path: str) -> str:
     return "/" if len(parts) <= 1 or parts[0] == "" else parts[0] + "/"
 
 
-# ── Auth helpers ──────────────────────────────────────────────────────────
 def get_current_user(request: Request) -> Optional[dict]:
     token = request.cookies.get("session_token")
     if not token:
@@ -165,7 +183,7 @@ async def list_directory(request: Request, path: str = "/"):
         f["is_duplicate"] = f.get("file_hash", "") in dup_hashes
 
     return {
-        "path":       path,
+        "path":        path,
         "parent_path": parent_path(path) if path != "/" else None,
         "directories": subdirs,
         "files":       file_list,
@@ -192,11 +210,11 @@ async def create_directory(request: Request):
         raise HTTPException(status_code=409, detail="A directory with that name already exists here")
 
     result = dirs_col.insert_one({
-        "owner_uid":  uid,
-        "name":       name,
-        "path":       new_path,
+        "owner_uid":   uid,
+        "name":        name,
+        "path":        new_path,
         "parent_path": cur,
-        "created_at": datetime.utcnow(),
+        "created_at":  datetime.utcnow(),
     })
     return {"status": "created", "path": new_path, "id": str(result.inserted_id)}
 
@@ -217,7 +235,7 @@ async def delete_directory(request: Request, dir_id: str):
     if directory["path"] == "/":
         raise HTTPException(status_code=400, detail="Cannot delete root directory")
 
-    path = directory["path"]
+    path         = directory["path"]
     file_count   = files_col.count_documents({"owner_uid": uid, "directory_path": path})
     subdir_count = dirs_col.count_documents({"owner_uid": uid, "parent_path": path})
 
@@ -229,3 +247,177 @@ async def delete_directory(request: Request, dir_id: str):
 
     dirs_col.delete_one({"_id": oid, "owner_uid": uid})
     return {"status": "deleted"}
+
+
+# ── File API ──────────────────────────────────────────────────────────────
+@app.post("/api/file/upload")
+async def upload_file(
+    request: Request,
+    file: UploadFile = FastAPIFile(...),
+    directory_path: str = Form("/"),
+    overwrite: str = Form("false"),
+):
+    user = require_auth(request)
+    uid  = user["uid"]
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No filename provided")
+
+    if not dirs_col.find_one({"owner_uid": uid, "path": directory_path}):
+        raise HTTPException(status_code=404, detail="Directory not found")
+
+    existing = files_col.find_one({"owner_uid": uid, "directory_path": directory_path, "name": file.filename})
+    if existing and overwrite.lower() != "true":
+        return JSONResponse(status_code=409, content={
+            "status":  "conflict",
+            "message": f"'{file.filename}' already exists here. Overwrite?",
+            "file_id": str(existing["_id"]),
+        })
+
+    content   = await file.read()
+    file_hash = hashlib.sha256(content).hexdigest()
+    blob_name = f"{uid}{directory_path}{file.filename}"
+
+    blob_service.get_blob_client(container=CONTAINER, blob=blob_name).upload_blob(
+        io.BytesIO(content),
+        overwrite=True,
+        content_settings=ContentSettings(content_type=file.content_type or "application/octet-stream"),
+    )
+
+    doc = {
+        "owner_uid":      uid,
+        "name":           file.filename,
+        "directory_path": directory_path,
+        "blob_name":      blob_name,
+        "size":           len(content),
+        "content_type":   file.content_type or "application/octet-stream",
+        "file_hash":      file_hash,
+        "created_at":     datetime.utcnow(),
+        "shared_with":    [],
+    }
+
+    if existing:
+        files_col.replace_one({"_id": existing["_id"]}, doc)
+        return {"status": "replaced", "name": file.filename}
+    else:
+        result = files_col.insert_one(doc)
+        return {"status": "uploaded", "id": str(result.inserted_id), "name": file.filename}
+
+
+@app.get("/api/file/download/{file_id}")
+async def download_file(request: Request, file_id: str):
+    user = require_auth(request)
+    uid  = user["uid"]
+
+    try:
+        oid = ObjectId(file_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid ID")
+
+    file_doc = files_col.find_one({"_id": oid, "$or": [{"owner_uid": uid}, {"shared_with": uid}]})
+    if not file_doc:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    try:
+        content = blob_service.get_blob_client(
+            container=CONTAINER, blob=file_doc["blob_name"]
+        ).download_blob().readall()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Storage error: {e}")
+
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type=file_doc.get("content_type", "application/octet-stream"),
+        headers={"Content-Disposition": f'attachment; filename="{file_doc["name"]}"'},
+    )
+
+
+@app.delete("/api/file/{file_id}")
+async def delete_file(request: Request, file_id: str):
+    user = require_auth(request)
+    uid  = user["uid"]
+
+    try:
+        oid = ObjectId(file_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid ID")
+
+    file_doc = files_col.find_one({"_id": oid, "owner_uid": uid})
+    if not file_doc:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    try:
+        blob_service.get_blob_client(container=CONTAINER, blob=file_doc["blob_name"]).delete_blob()
+    except Exception:
+        pass
+
+    files_col.delete_one({"_id": oid, "owner_uid": uid})
+    return {"status": "deleted"}
+
+
+# ── Duplicates ────────────────────────────────────────────────────────────
+@app.get("/api/duplicates/all")
+async def find_all_duplicates(request: Request):
+    user = require_auth(request)
+    uid  = user["uid"]
+
+    pipeline = [
+        {"$match": {"owner_uid": uid, "file_hash": {"$ne": ""}}},
+        {"$group": {
+            "_id":   "$file_hash",
+            "count": {"$sum": 1},
+            "files": {"$push": {
+                "id":             {"$toString": "$_id"},
+                "name":           "$name",
+                "directory_path": "$directory_path",
+                "size":           "$size",
+            }},
+        }},
+        {"$match": {"count": {"$gt": 1}}},
+    ]
+    return {"duplicates": list(files_col.aggregate(pipeline))}
+
+
+# ── File sharing ──────────────────────────────────────────────────────────
+@app.post("/api/file/{file_id}/share")
+async def share_file(request: Request, file_id: str):
+    user = require_auth(request)
+    uid  = user["uid"]
+
+    try:
+        oid = ObjectId(file_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid ID")
+
+    body  = await request.json()
+    email = body.get("email", "").strip()
+    if not email:
+        raise HTTPException(status_code=400, detail="Email required")
+
+    target = users_col.find_one({"email": email})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target["uid"] == uid:
+        raise HTTPException(status_code=400, detail="Cannot share with yourself")
+
+    if not files_col.find_one({"_id": oid, "owner_uid": uid}):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    files_col.update_one({"_id": oid}, {"$addToSet": {"shared_with": target["uid"]}})
+    return {"status": "shared", "with": email}
+
+
+@app.get("/api/shared-with-me")
+async def shared_with_me(request: Request):
+    user = require_auth(request)
+    uid  = user["uid"]
+
+    shared = list(files_col.find(
+        {"shared_with": uid},
+        {"name": 1, "size": 1, "content_type": 1, "owner_uid": 1},
+    ))
+    for f in shared:
+        f["_id"] = str(f["_id"])
+        owner = users_col.find_one({"uid": f["owner_uid"]}, {"email": 1})
+        f["owner_email"] = owner["email"] if owner else "Unknown"
+    return {"files": shared}
