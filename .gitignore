@@ -10,3 +10,7 @@ firebase-credentials.json
 *.egg-info/
 dist/
 build/
+__blobstorage__/
+__queuestorage__/
+__azurite_db_*/
+*.log
